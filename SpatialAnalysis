@@ -1,0 +1,413 @@
+
+var NYC = /* color: #d63000 */geometry11,
+    BoroughBoundaries = ee.FeatureCollection("users/annaliebowitz/BoroughBoundaries"),
+    BedStuy = /* color: #ffffff */geometry2,
+    MTEC = /* color: #d63000 */geometry3,
+    MTECAREA = /* color: #d63000 */geometry4,
+    DekalbTransect = /* color: #000000 */geometry5,
+    point1 = /* color: #ffdd00 */geometry6,
+    point2 = /* color: #ff9300 */geometry7,
+    point3 = /* color: #fed601 */geometry8,
+    point4 = /* color: #1affe1 */geometry9,
+    point5 = /* color: #beff26 */geometry,
+    Bayridge = BayRidge.geometry(),
+    EastNY = table,
+    Flatbush = table2,
+    ExportArea = 
+    /* color: #d63000 */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    geometry10,
+    CourrierNew = ee.FeatureCollection("ft:1VAK4EIsvjRr57E-vkhJVLwAp82HAMMktFrGSPB4H");
+
+  
+
+    /********************************** LOAD LANDSAT DATA ***********************************/
+//LOAD LANDSAT DATA COLLECTION AND FILTER
+
+//Read in Landsat 8 collection; filter for place and date range
+//2019-2021
+var collection = ee.ImageCollection("LANDSAT/LC08/C01/T1") 
+  .filterBounds(NYC)                              //restrict to images containing NYC
+  .filter(ee.Filter.calendarRange(5, 9, 'month')) //restrict to images to summer months
+  .filter(ee.Filter.date('2019-01-01T08:00', '2021-01-01T08:00')) //restrict to 2019-2021
+  .filter(ee.Filter.lt('CLOUD_COVER_LAND', 11))   //filter significantly cloudy images
+  .sort('DATE_ACQUIRED');                         //sort images by date captured
+  
+  
+//2013-2016
+var collection1316 = ee.ImageCollection("LANDSAT/LC08/C01/T1") 
+  .filterBounds(NYC)                              //restrict to images containing NYC
+  .filter(ee.Filter.calendarRange(5, 9, 'month')) //restrict to images to summer months
+  .filter(ee.Filter.date('2013-04-11T00:00', '2016-01-01T08:00')) //restrict to 2013-2016
+  .filter(ee.Filter.lt('CLOUD_COVER_LAND', 11))   //filter significantly cloudy images
+  .sort('DATE_ACQUIRED');                         //sort images by date captured
+  
+//2000-2003
+var collection0003 = ee.ImageCollection("LANDSAT/LT05/C01/T1_TOA").filterBounds(NYC)
+.filter(ee.Filter.calendarRange(5, 9, 'month'))
+.filter(ee.Filter.date('2000-04-11T00:00', '2003-01-01T08:00'))
+.filter(ee.Filter.lt('CLOUD_COVER_LAND', 11))
+.sort('DATE_ACQUIRED');
+  
+
+// //This function clips images to NYC
+ var clip = function(image) {
+   return image.clip(BoroughBoundaries);
+ };
+ collection = collection.map(clip);  //map the clipping function over the image collection
+ collection1316 = collection1316.map(clip);
+ collection0003 = collection0003.map(clip);
+
+//print the number of images in the collection
+var count = collection.size();
+//print('Number of Images in the Image Collection:', count);
+var count2 = collection1316.size();
+//print('Number of Images in the Image Collection:', count2);
+var count3 = collection0003.size();
+//print('Number of Images in the Image Collection:', count3);
+
+//Center the map on MTEC, and zoom
+Map.centerObject(MTEC, 14);
+
+/***************************** FUNCTIONS FOR USGS ALGORITHM *****************************/
+//LAND SURFACE TEMPERATURE ALGORITHM ADAPTED FROM: D ANANDABABU, B M PURUSHOTHAMAN, BABU
+//S. SURESH: https://www.ijariit.com/manuscripts/v4i2/V4I2-1195.pdf
+//CALCULATES LAND SURFACE TEMPERATURE FROM LANDSAT IMAGES
+
+//STEP 1. TOP OF ATMOSPHERE (TOA) SPECTRAL RADIANCE
+var addTOA = function(image) {
+  var Ml = ee.Image(ee.Number(image.get('RADIANCE_MULT_BAND_10'))); //Radiance Multi. Band
+  var Qcal = image.select('B10');   //Quantized & Calibrated Standard Product Pixel Values 
+  var Al = ee.Image(ee.Number(image.get('RADIANCE_ADD_BAND_10')));  //Radiance Add Band
+  var TOA = Qcal.multiply(Ml).add(Al).rename('TOA');
+  return image.addBands(TOA);
+};
+collection = collection.map(addTOA);
+collection1316 = collection1316.map(addTOA);
+
+var addTOA5 = function(image) {
+  var M1 = ee.Image(ee.Number(image.get('RADIANCE_MULT_BAND_6')));
+  var Qcal = image.select('B6'); 
+  var A1 = ee.Image(ee.Number(image.get('RADIANCE_ADD_BAND_6')));
+  var TOA = Qcal.multiply(M1).add(A1).rename('TOA');
+  return image.addBands(TOA);
+};
+collection0003 = collection0003.map(addTOA5);
+
+//STEP 2. TOA TO BRIGHTNESS TEMPERATURE (BT)
+var addBT = function(image) {
+  var K1 = ee.Image(ee.Number(image.get('K1_CONSTANT_BAND_10'))); //K1 Constant Band
+  var K2 = ee.Image(ee.Number(image.get('K2_CONSTANT_BAND_10'))); //K2 Constant Band
+  var L = image.select('TOA');                                    //TOA Spectral Radiance
+  var BT = (K2.divide(((K1.divide(L).add(1)).log()))).subtract(273.15).rename('BT');
+  return image.addBands(BT);
+};
+
+collection = collection.map(addBT);
+collection1316 = collection1316.map(addBT);
+
+var addBT5 = function(image) {
+  var K1 = ee.Image(ee.Number(image.get('K1_CONSTANT_BAND_6')));
+  var K2 = ee.Image(ee.Number(image.get('K2_CONSTANT_BAND_6')));
+  var L = image.select('TOA');
+  var BT = (K2.divide(((K1.divide(L).add(1)).log()))).subtract(273.15).rename('BT');
+  return image.addBands(BT);
+};
+
+collection0003 = collection0003.map(addBT5);
+//proxy for lst
+
+//STEP 3. CALCULATE NDVI (NORMALIZED DIFFERENTIAL VEGETATION)
+var addNDVI = function(image) {
+  var NDVI = (image.select('B5').subtract(image.select('B4')))
+  .divide(image.select('B5').add(image.select('B4'))).rename('NDVI');
+  return image.addBands(NDVI);
+};
+
+collection = collection.map(addNDVI);
+collection1316 = collection1316.map(addNDVI);
+
+var addNDVI5 = function(image) {
+  var NDVI = (image.select('B4').subtract(image.select('B3')))
+  .divide(image.select('B4').add(image.select('B3'))).rename('NDVI');
+  return image.addBands(NDVI);
+};
+
+collection0003 = collection0003.map(addNDVI5);
+
+//STEP 4. CALCULATE PROPORTION OF VEGETATION
+var addPV = function(image) {
+  var minReducer = ee.Reducer.min();
+  var maxReducer = ee.Reducer.max();
+  //use the reducer to get the min and max of the NDVI image
+  var NDVImin = image.select('NDVI').reduceRegion({
+   reducer: minReducer,
+   bestEffort: true,
+  }).toImage();
+  
+  var NDVImax = image.select('NDVI').reduceRegion({
+   reducer: maxReducer,
+   bestEffort: true,
+  }).toImage();
+  
+  var PV = ((image.select('NDVI').subtract(NDVImin))
+          .divide(NDVImax.subtract(NDVImin))).pow(2).rename('PV');
+  return image.addBands(PV);
+};
+
+collection = collection.map(addPV);
+collection1316 = collection1316.map(addPV);
+collection0003 = collection0003.map(addPV);
+
+//STEP 5. CALCULATE EMISSIVITY
+var addEmissivity = function(image) {
+  var Emissivity = image.select('PV').multiply(0.004).add(0.986).rename('Emissivity');
+  return(image.addBands(Emissivity));
+};
+
+collection = collection.map(addEmissivity);
+collection1316 = collection1316.map(addEmissivity);
+collection0003 = collection0003.map(addEmissivity);
+
+//STEP 6. CALCULATE LAND SURFACE TEMPERATURE
+var addLST = function(image) {
+  var BT = image.select('BT');
+  var LST = BT.divide(
+  (((BT.multiply(0.00115).divide(1.4388))
+  .multiply(image.select('Emissivity').log()).add(1)))).rename('LST');
+  //LST = LST.multiply(9).divide(5).add(32); //Convert to Fahrenheit (comment out for C)
+  return(image.addBands(LST));
+};
+collection = collection.map(addLST);
+collection1316 = collection1316.map(addLST);
+collection0003 = collection0003.map(addLST);
+
+// Chart time series of LST for point in 2019-2021
+var ts1 = ui.Chart.image.series({
+  imageCollection: collection,
+  region: geometry,
+  reducer: ee.Reducer.mean(),
+  scale: 30,
+  xProperty: 'system:time_start'}).setOptions({
+    title: 'LST 2019-2021 Time Series',
+    vAxis:{title: 'LST Kelvin'}});
+ //print(ts1);
+
+
+/*********************************** DISPLAY LST/NDVI MAP ************************************/
+//ADDS LST/NDVI MAP LAYER - 2019-2021
+
+//color palette for LST map visualization
+//var LSTpalette = ['blue', 'cornflowerblue', 'aqua', 'greenyellow',
+  //                'yellow', 'gold', 'orange', 'red'];
+var LSTpalette = ['00FFFF', '7FFFD4', '00FA9A', '90EE90', '9ACD32', 'ADFF2F', 'FFFF00', 'FFD700', 'FFA500', 'FF8C00', 'FF4500', 'FF0000', 'B22222'];
+                  
+var NDVIpalette = ['E9FFDB', 'D0F0C0', '98FB98', '90EE90', '00FF7F', '00FA9A', '77DD77', '50C878', '3CB371', '00A877'];
+
+//Visualization Parameters for Map
+var TsVisParams = {
+    min: 20, max: 40,    //use with C
+  //min: 80, max: 100,   // use with F
+  palette: LSTpalette};
+  
+var NDVITsVisParams = {
+  min: 0, max: 1,
+  palette: NDVIpalette
+};
+
+//Adds first image layer to map, do not display
+
+Map.addLayer(collection.first().select('LST'), TsVisParams, 'LST 20s', 0);
+Map.addLayer(collection.first().select('NDVI'), NDVITsVisParams, 'NDVI 20s', 0);
+
+
+//print date of image displayed to console
+var date = collection.first().get('DATE_ACQUIRED');
+//print('Date of Map Displayed:', date);
+
+//Image of mean LST calculated over the image collection
+var mean_LST = collection.mean().select('LST');
+var mean_NDVI = collection.mean().select('NDVI');
+
+//Apply correct visualization parameters to mean LST Image
+var mean_image = mean_LST.visualize({
+  min: 27, max: 34,     //use with C
+  //min: 80, max: 92,   //use with F
+  palette: LSTpalette}); // create the mean image
+
+var mean_NDVIimage = mean_NDVI.visualize({
+  min: 0, max: 1,
+  palette: NDVIpalette
+});
+
+//Displays the average LST for each pixel over all the images on Map
+//Map.addLayer(mean_image, {}, 'Mean_LST - 2019-2021');
+//Map.addLayer(mean_NDVIimage, {}, 'Mean_NDVI - 2019-2021');
+
+//print("maybe this will work")
+//print(mean_image)
+//print(mean_NDVIimage)
+
+Map.addLayer(mean_LST, {min: 27, max: 34, palette: LSTpalette}, 'Mean_LST - 2019-2021');
+Map.addLayer(mean_NDVI, {min: 0, max: 1, palette: NDVIpalette}, 'Mean_NDVI - 2019-2021');
+
+//ADDS LST/NDVI MAP LAYER - 2013-2016
+
+//Adds first image layer to map, do not display
+//print(collection1316);
+//print(collection1316.first());
+Map.addLayer(collection1316.first().select('LST'), TsVisParams, 'LST 10s', 0);
+Map.addLayer(collection1316.first().select('NDVI'), NDVITsVisParams, 'NDVI 10s', 0);
+
+//print date of image displayed to console
+var date = collection1316.first().get('DATE_ACQUIRED');
+//print('Date of Map Displayed:', date);
+
+//Image of mean LST calculated over the image collection
+var mean_LST1316 = collection1316.mean().select('LST');
+var mean_NDVI1316 = collection1316.mean().select('NDVI');
+
+//Apply correct visualization parameters to mean LST Image
+var mean_image1316 = mean_LST1316.visualize({
+  min: 27, max: 34,     //use with C
+  //min: 80, max: 92,   //use with F
+  palette: LSTpalette}); // create the mean image
+
+var mean_NDVIimage1316 = mean_NDVI1316.visualize({
+  min: 0, max: 1,
+  palette: NDVIpalette
+});
+
+//Displays the average LST for each pixel over all the images on Map
+//Map.addLayer(mean_image1316, {}, 'Mean_LST - 2013-2016');
+//Map.addLayer(mean_NDVIimage1316, {}, 'Mean_NDVI - 2013-2016');
+Map.addLayer(mean_LST1316, {min: 27, max: 34, palette: LSTpalette}, 'Mean_LST - 2013-2016');
+Map.addLayer(mean_NDVI1316, {min: 0, max: 1, palette: NDVIpalette}, 'Mean_NDVI - 2013-2016');
+
+
+//ADDS LST/NDVI MAP LAYER - 2000-2003
+
+//Adds first image layer to map, do not display
+//print(collection0003);
+//print(collection0003.first());
+Map.addLayer(collection0003.first().select('LST'), TsVisParams, 'LST', 0);
+Map.addLayer(collection0003.first().select('NDVI'), NDVITsVisParams, 'NDVI', 0);
+
+//print date of image displayed to console
+var date = collection0003.first().get('DATE_ACQUIRED');
+//print('Date of Map Displayed:', date);
+
+//Image of mean LST calculated over the image collection
+var mean_LST0003 = collection0003.mean().select('LST');
+var mean_NDVI0003 = collection0003.mean().select('NDVI');
+
+//Apply correct visualization parameters to mean LST Image
+var mean_image0003 = mean_LST0003.visualize({
+  min: 27, max: 34,     //use with C
+  //min: 80, max: 92,   //use with F
+  palette: LSTpalette}); // create the mean image
+
+var mean_NDVIimage0003 = mean_NDVI0003.visualize({
+  min: 0, max: 1,
+  palette: NDVIpalette
+});
+
+//Displays the average LST for each pixel over all the images on Map
+//Map.addLayer(mean_image0003, {}, 'Mean_LST - 2000-2003');
+//Map.addLayer(mean_NDVIimage0003, {}, 'Mean_NDVI - 2000-2003');
+
+Map.addLayer(mean_LST0003, {min: 27, max: 24, palette: LSTpalette}, 'Mean_LST - 2000-2003');
+Map.addLayer(mean_NDVI0003, {min: 0, max: 1, palette: NDVIpalette}, 'Mean_NDVI - 2000-2003');
+
+
+/************************************** MAP SLIDER **************************************/
+// // Use the start of the collection and now to bound the slider.
+// var start = ee.Image(collection.first()).date().get('year').format();
+// var now = Date.now();
+// var end = ee.Date(now).format();
+
+// // Run this function on a change of the dateSlider.
+// var showMosaic = function(range) {
+//   var mosaic = ee.Algorithms.Landsat.simpleComposite({
+//     collection: collection.filterDate(range.start(), range.end())
+//   });
+//   // Asynchronously compute the name of the composite.  Display it.
+//   range.start().get('year').evaluate(function(name) {
+//     var visParams = {max: 37, min: 24, palette: LSTpalette};
+//     Map.addLayer(mosaic, visParams, name + ' composite');
+//   });
+// };
+
+// // Asynchronously compute the date range and show the slider.
+// var dateRange = ee.DateRange(start, end).evaluate(function(range) {
+//   var dateSlider = ui.DateSlider({
+//     start: range.dates[0],
+//     end: range.dates[1],
+//     value: null,
+//     period: 30,
+//     onChange: showMosaic
+//   });
+//   Map.add(dateSlider.setValue(now));
+// });
+
+/********************************* SUBTRACTING MAPS **********************************/
+
+// var changeVisPalette = ['aliceblue', 'lightblue', 'skyblue', 'deepskyblue', 'blue', 'darkblue'];
+// var vizParams = {
+//   bands: ['LST'],
+//   palette: changeVisPalette
+// };
+// var vizParamsNDVI = {
+//   bands: ['NDVI'],
+//   palette: changeVisPalette
+// };
+
+// //ADD A LAYER OF THE 2020'S MINUS 2010'S (LST)
+// var change_image = mean_LST.subtract(mean_LST1316);
+// Map.addLayer(change_image, vizParams, 'Change in LST (20s to 10s)');
+
+// //ADD A LAYER OF THE 2020'S MINUS 2010'S (NDVI)
+// var change_imageNDVI = mean_NDVI.subtract(mean_NDVI1316);
+// Map.addLayer(change_imageNDVI, vizParamsNDVI, 'Change in NDVI (20s to 10s)');
+
+// //ADD A LAYER OF THE 2010'S MINUS 2000'S (LST)
+// var change_image2 = mean_LST1316.subtract(mean_LST0003);
+// Map.addLayer(change_image2, vizParams, 'Change in LST (00s to 10s)');
+
+// //ADD A LAYER OF THE 2010'S MINUS 2000'S (NDVI)
+// var change_imageNDVI2 = mean_NDVI1316.subtract(mean_NDVI0003);
+// Map.addLayer(change_imageNDVI2, vizParamsNDVI, 'Change in NDVI (00s to 10s)');
+
+
+/************************************** NDVI vs. LST CORRELATIONS **************************************/
+
+
+// get the lst and ndvi imgs
+var lstimg = mean_LST.select('LST').rename('lst');
+var ndviimg = mean_NDVI.select('NDVI').rename('ndvi');
+
+ 
+// combine two images
+var img = lstimg.addBands(ndviimg);
+ 
+// samplepoints
+var scale = Map.getScale();
+print(scale)
+
+var values = img.sample({ region: NYC, scale: 30, numPixels: 500, geometries: true}) 
+
+print(values{0})
+
+Map.addLayer(values.style({ color: 'red', pointSize: 2 }), {}, 'samples')
+ 
+// plot sampled features as a scatter chart
+var chart = ui.Chart.feature.byFeature(values, 'lst', 'ndvi')
+  .setChartType('ScatterChart')
+  .setOptions({ pointSize: 2, pointColor: 'red', width: 300, height: 300, titleX: 'LST', titleY: 'NDVI' })
+  
+print(chart)
+
